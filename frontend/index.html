@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <title>Injective is frying my brain</title>
+  <style>
+    body { font-family: Arial, sans-serif; padding: 20px; background: #121212; color: #eee; }
+    h1 { color: #1db954; }
+    #prices { font-size: 1.5em; }
+    .price-item { margin-bottom: 10px; }
+  </style>
+</head>
+<body>
+  <h1>Live BTC/USD Price</h1>
+  <div id="prices">Connecting...</div>
+
+  <script>
+    const pricesDiv = document.getElementById('prices');
+
+    const evtSource = new EventSource('/stream');
+
+    evtSource.onopen = () => {
+      pricesDiv.textContent = 'Connected. Waiting for updates...';
+    };
+
+    evtSource.onerror = () => {
+      pricesDiv.textContent = 'Connection lost. Retrying...';
+    };
+
+    evtSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        pricesDiv.innerHTML = ''; // limpa conteúdo
+
+        const el = document.createElement('div');
+        el.className = 'price-item';
+        el.textContent = `BTC/USD: $${data.price.toFixed(2)} (${new Date(data.timestamp).toLocaleTimeString()})`;
+        pricesDiv.appendChild(el);
+      } catch (e) {
+        console.error('Invalid event data', e);
+      }
+    };
+  </script>
+</body>
+</html>
