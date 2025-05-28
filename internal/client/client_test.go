@@ -12,7 +12,7 @@ func TestClientManager_RegisterAndUnregister(t *testing.T) {
 	cm := NewClientManager()
 
 	// Create new client and register
-	c := NewClient()
+	c := NewClientWithBuffer(1)
 	cm.Register(c)
 
 	if c.ID == "" {
@@ -135,7 +135,7 @@ func TestClientManagerRace(t *testing.T) {
 			case <-stop:
 				return
 			default:
-				c := NewClient()
+				c := NewClientWithBuffer(1)
 				cm.Register(c)
 			}
 		}

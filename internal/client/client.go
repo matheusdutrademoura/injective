@@ -9,36 +9,33 @@ import (
 	"github.com/matheusdutrademoura/injective/internal/models"
 )
 
-// Client represents a connected client receiving updates
+// Client represents a connected client receiving price updates via a channel.
 type Client struct {
 	ID   string
 	Chan chan models.PriceUpdate
 }
 
-// NewClientWithBuffer creates a client with a buffered channel.
+// NewClientWithBuffer creates a client with a buffered channel of the specified size.
+// Buffering prevents slow clients from blocking the broadcaster immediately.
 func NewClientWithBuffer(buffer int) *Client {
 	return &Client{Chan: make(chan models.PriceUpdate, buffer)}
 }
 
-// keep the original NewClient for convenience with unbuffered channel if needed
-func NewClient() *Client {
-	return NewClientWithBuffer(0)
-}
-
-// ClientManager manages all connected clients safely
+// ClientManager manages concurrent access to the map of connected clients.
 type ClientManager struct {
 	clients map[*Client]bool
 	mutex   sync.Mutex
 }
 
+// clientCounter atomically generates unique client IDs for logging and identification.
 var clientCounter int64
 
 func NewClientManager() *ClientManager {
 	return &ClientManager{clients: make(map[*Client]bool)}
 }
 
-// Register adds a client to the manager.
-// ID is generated atomically to uniquely identify clients in logs.
+// Register adds a new client to the manager, assigning it a unique ID.
+// Uses atomic operations to safely generate IDs in concurrent environment.
 func (cm *ClientManager) Register(c *Client) {
 	c.ID = fmt.Sprintf("client-%d", atomic.AddInt64(&clientCounter, 1))
 	cm.mutex.Lock()
@@ -47,7 +44,8 @@ func (cm *ClientManager) Register(c *Client) {
 	log.Printf("--> registered [%s]", c.ID)
 }
 
-// Unregister removes a client and closes its channel.
+// Unregister removes the client and closes its channel to signal disconnection.
+// Closing the channel allows goroutines receiving from it to exit gracefully.
 func (cm *ClientManager) Unregister(c *Client) {
 	cm.mutex.Lock()
 	_, exists := cm.clients[c]
@@ -59,9 +57,10 @@ func (cm *ClientManager) Unregister(c *Client) {
 	close(c.Chan)
 }
 
-// Broadcast sends the update to all clients without blocking.
-// Clients whose channel is full are considered slow and removed.
-// To avoid deadlock, slow clients are collected first and removed after releasing the mutex.
+// Broadcast sends the price update to all registered clients.
+// It uses non-blocking sends to avoid blocking the entire system on slow or stuck clients.
+// Clients whose channel buffer is full are considered slow and are removed to maintain overall system health.
+// Slow clients are collected while holding the lock and removed after releasing the lock to avoid deadlocks.
 func (cm *ClientManager) Broadcast(update models.PriceUpdate) {
 	cm.mutex.Lock()
 	var slowClients []*Client
@@ -69,16 +68,16 @@ func (cm *ClientManager) Broadcast(update models.PriceUpdate) {
 	for client := range cm.clients {
 		select {
 		case client.Chan <- update:
-			// sent successfully
+			// Successfully sent update
 		default:
-			// client channel full, likely stuck or too slow
+			// Client channel full; mark client for removal
 			log.Printf("[!] dropping client [%s]", client.ID)
 			slowClients = append(slowClients, client)
 		}
 	}
 	cm.mutex.Unlock()
 
-	// Unregister slow clients outside the lock to avoid deadlock
+	// Unregister slow clients outside the lock to avoid deadlocks.
 	for _, c := range slowClients {
 		cm.Unregister(c)
 	}

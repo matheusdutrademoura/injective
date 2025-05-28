@@ -16,6 +16,12 @@ import (
 	"github.com/matheusdutrademoura/injective/internal/ringbuffer"
 )
 
+const (
+	updateInterval   = 5 * time.Second                     // How often we fetch new price data
+	historyWindow    = 1 * time.Hour                       // How much historical data we want to keep with fixed memory usage
+	maxBufferEntries = int(historyWindow / updateInterval) // 3600s / 5s = 720 entries
+)
+
 // Server ties all components together and handles HTTP requests
 type Server struct {
 	clientManager *client.ClientManager
@@ -28,6 +34,7 @@ func NewServer() *Server {
 	if coindeskApiKey == "" {
 		log.Fatal("COINDESK_API_KEY env var not set")
 	}
+
 	coindeskApiURL := os.Getenv("COINDESK_API_URL")
 	if coindeskApiURL == "" {
 		log.Fatal("COINDESK_API_URL env var not set")
@@ -35,13 +42,13 @@ func NewServer() *Server {
 
 	return &Server{
 		clientManager: client.NewClientManager(),
-		updateBuffer:  ringbuffer.NewRingBuffer(300, 5*time.Minute),
 		priceFetcher:  fetcher.NewPriceFetcher(coindeskApiKey, coindeskApiURL),
+		updateBuffer:  ringbuffer.NewRingBuffer(maxBufferEntries, historyWindow),
 	}
 }
 
-// Broadcaster continuously fetches price, stores in buffer, and broadcasts to clients.
-// Runs in a separate goroutine.
+// Broadcaster runs in a goroutine, continuously fetching prices,
+// storing them in the ring buffer, and broadcasting to all clients.
 func (s *Server) Broadcaster() {
 	for {
 		price, err := s.priceFetcher.Fetch()
@@ -58,7 +65,7 @@ func (s *Server) Broadcaster() {
 		s.updateBuffer.Add(update)
 		s.clientManager.Broadcast(update)
 
-		time.Sleep(5 * time.Second)
+		time.Sleep(updateInterval)
 	}
 }
 
@@ -76,6 +83,8 @@ func (s *Server) SseHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Connection", "keep-alive")
 	w.Header().Set("Access-Control-Allow-Origin", "*")
 
+	// We use a buffer size of 1 to avoid blocking the broadcaster on slow clients.
+	// If the client is too slow to consume updates, the connection will be dropped.
 	client := client.NewClientWithBuffer(1)
 	s.clientManager.Register(client)
 
@@ -88,15 +97,19 @@ func (s *Server) SseHandler(w http.ResponseWriter, r *http.Request) {
 	sinceParam := r.URL.Query().Get("since")
 	if sinceParam != "" {
 		sinceUnix, err := strconv.ParseInt(sinceParam, 10, 64)
-		if err == nil {
-			sinceTime := time.Unix(sinceUnix, 0).UTC()
-			missedUpdates := s.updateBuffer.Since(sinceTime)
-			for _, update := range missedUpdates {
-				data, _ := json.Marshal(update)
-				fmt.Fprintf(w, "data: %s\n\n", data)
-				flusher.Flush()
-			}
+		if err != nil {
+			log.Printf("invalid 'since' param: %v", err)
+			return
 		}
+
+		sinceTime := time.Unix(sinceUnix, 0).UTC()
+		missedUpdates := s.updateBuffer.Since(sinceTime)
+		for _, update := range missedUpdates {
+			data, _ := json.Marshal(update)
+			fmt.Fprintf(w, "data: %s\n\n", data)
+			flusher.Flush()
+		}
+
 	}
 
 	for update := range client.Chan {
@@ -106,6 +119,7 @@ func (s *Server) SseHandler(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// ServeFrontend serves static files from the ./frontend directory.
 func (s *Server) ServeFrontend() http.Handler {
 	return http.FileServer(http.Dir(filepath.Join(".", "frontend")))
 }

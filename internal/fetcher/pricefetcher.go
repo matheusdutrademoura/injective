@@ -8,7 +8,7 @@ import (
 	"time"
 )
 
-// PriceFetcher fetches BTC price from CoinDesk API with timeout context and retry.
+// PriceFetcher handles fetching BTC price from the CoinDesk API.
 type PriceFetcher struct {
 	apiKey string
 	apiURL string
@@ -21,7 +21,8 @@ func NewPriceFetcher(apiKey, apiURL string) *PriceFetcher {
 	}
 }
 
-// Fetch performs HTTP GET with a 3-second timeout context to avoid hanging.
+// Fetch makes a HTTP GET request to the CoinDesk API with a 3-second timeout.
+// Using context.WithTimeout prevents hanging requests.
 func (pf *PriceFetcher) Fetch() (float64, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
